@@ -13,6 +13,30 @@ import (
 
 const secretAccessKeyType = "creds"
 
+func (b *backend) pathSetGetCreds() *framework.Path {
+	return &framework.Path{
+		Pattern: libraryPrefix + framework.GenericNameRegex("name") + "/creds$",
+		Fields: map[string]*framework.FieldSchema{
+			"name": {
+				Type:        framework.TypeLowerCaseString,
+				Description: "Name of the set.",
+				Required:    true,
+			},
+			"service_account_name": {
+				Type:        framework.TypeCommaStringSlice,
+				Description: "The username/logon name for the service account for the creds.",
+			},
+		},
+		Operations: map[logical.Operation]framework.OperationHandler{
+			logical.ReadOperation: &framework.PathOperation{
+				Callback: b.operationGetCreds(),
+				Summary:  "Get creds for a service account in the library.",
+			},
+		},
+		HelpSynopsis: `Get creds for a service account in the library.`,
+	}
+}
+
 func (b *backend) pathSetCheckOut() *framework.Path {
 	return &framework.Path{
 		Pattern: libraryPrefix + framework.GenericNameRegex("name") + "/check-out$",
@@ -216,6 +240,49 @@ func (b *backend) pathSetManageCheckIn() *framework.Path {
 			},
 		},
 		HelpSynopsis: `Force checking service accounts in to the library.`,
+	}
+}
+
+func (b *backend) operationGetCreds() framework.OperationFunc {
+	return func(ctx context.Context, req *logical.Request, fieldData *framework.FieldData) (*logical.Response, error) {
+		setName := fieldData.Get("name").(string)
+		lock := locksutil.LockForKey(b.checkOutLocks, setName)
+		lock.Lock()
+		defer lock.Unlock()
+
+		serviceAccountNameRaw, serviceAccountNameSent := fieldData.GetOk("service_account_name")
+		var serviceAccountName []string
+		if serviceAccountNameSent {
+			serviceAccountName = serviceAccountNameRaw.([]string)
+		}
+
+		set, err := readSet(ctx, req.Storage, setName)
+		if err != nil {
+			return nil, err
+		}
+		if set == nil {
+			return logical.ErrorResponse(fmt.Sprintf(`%q doesn't exist`, setName)), nil
+		}
+
+		if len(serviceAccountName) == 0 {
+			return logical.ErrorResponse(`the "service_account_name" to view creds for must be provided`), nil
+		} else if len(serviceAccountName) > 1 {
+			return logical.ErrorResponse(`current limitation: the "service_account_name" must only have one account to view creds for`), nil
+		} else {
+			for _, serviceAccountName := range serviceAccountName {
+				password, err := retrievePassword(ctx, req.Storage, serviceAccountName)
+				if err != nil {
+					return nil, err
+				}
+				respData := map[string]interface{}{
+					"service_account_name": serviceAccountName,
+					"password":             password,
+				}
+				resp := &logical.Response{Data: respData}
+				return resp, nil
+			}
+		}
+		return logical.ErrorResponse(`should not have ended up here`), nil
 	}
 }
 
