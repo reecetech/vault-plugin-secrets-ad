@@ -20,4 +20,4 @@ docker run \
 
 sleep 30
 
-LDAPTLS_REQCERT=never ldapadd -h 127.0.0.1 -Z -p 389 -w "SuperSecretPassw0rd" -D "CN=Administrator,CN=Users,DC=corp,DC=example,DC=net" -f user.ldif
+LDAPTLS_REQCERT=never ldapadd -h 127.0.0.1 -Z -p 389 -w "SuperSecretPassw0rd" -D "CN=Administrator,CN=Users,DC=corp,DC=example,DC=net" -f "${DIR}"/user.ldif
