@@ -46,6 +46,7 @@ func newBackend(client secretsClient, passwordGenerator passwordGenerator) *back
 			// The following paths are for AD credential checkout.
 			adBackend.pathSetCheckIn(),
 			adBackend.pathSetManageCheckIn(),
+			adBackend.pathSetGetCreds(),
 			adBackend.pathSetCheckOut(),
 			adBackend.pathSetStatus(),
 			adBackend.pathSets(),

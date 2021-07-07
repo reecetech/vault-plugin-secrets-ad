@@ -1,3 +1,68 @@
+# ⚠️ Reece customised AD secrets backend
+
+This customisation adds a `creds` endpoint to "sneak peek" what the AD library accounts passwords are before people
+check them out from the library.
+
+The use-case is to synchronise these passwords to non-AD integrated server's `/etc/shadow`.
+
+It's important to secure the `creds` endpoint using ACLs, so that only the non-AD integrated server's app role
+can access the endpoint (and no one else), otherwise the privacy of these credentials is compromised.
+
+## Updating the Reece patch
+
+To update the Reece patch, amend the changes into the commit tagged by `reece_patch` tag (which should be HEAD of the
+`reece_patch_reference` branch).
+
+Then move the tag to the amended commit.
+
+Then force push the `reece_patch_reference` branch and `reece_patch` tag.
+
+Example:
+
+```
+git checkout reece_patch_reference
+
+<make changes>
+
+git add <changed files>
+git commit --amend --reuse-message=HEAD
+
+git tag -d reece_patch
+git tag reece_patch
+
+git push --force
+git push --delete origin reece_patch
+git push --tag
+```
+
+At this point, you can check the GitHub Action to see that reece_patch_reference built correctly:
+https://github.com/reecetech/vault-plugin-secrets-ad/actions/workflows/build-test-publish.yml
+
+## Creating a new release
+
+If you've changed the patch, then you probably want a new build.
+
+If the latest version is, for example, `reece-v0.10.0` - then we would like to create an release 2 of `reece-v0.10.0`:
+
+Example:
+
+```
+git checkout v0.10.0  # the upstream release tag
+
+git checkout -b v0.10.0+reece_patch-rel2  # release 2 branch
+
+git rm -rf .circleci .github
+git commit -m 'remove upstream CI'
+git cherry-pick reece_ci
+
+git cherry-pick reece_patch
+
+git tag "reece-v0.10.0+rel2"
+git push --set-upstream origin v0.10.0+reece_patch-rel2
+git push --tags
+```
+
+
 # Vault Plugin: Active Directory Secrets Backend
 
 This is a standalone backend plugin for use with [Hashicorp Vault](https://www.github.com/hashicorp/vault).
