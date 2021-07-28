@@ -1,0 +1,192 @@
+---
+
+# To update this pipeline, amend the changes into the commit tagged by `reece_ci` tag.
+# Then move the tag to the amended commit.
+# Then force push the `reece_ci_reference` branch and `reece_ci` tag.
+# Finally, repeat the custom patch of the code and force push that branch and tag as well.
+#
+# Example:
+# ```
+# git checkout reece_ci_reference
+#
+# <make changes>
+#
+# git add .github/workflows
+# git commit --amend --reuse-message=HEAD
+# git tag -d reece_ci
+# git tag reece_ci
+# git push --force
+# git push --delete origin reece_ci
+# git push --tag
+#
+# git branch -D reece-build
+# git checkout -b reece-build
+# git cherry-pick reece_patch
+# git tag -d reece_patch
+# git tag reece_patch
+# git push --force
+# git push --delete origin reece_patch
+# git push --tag
+# ```
+
+name: Build, Test, and Publish
+
+on: push
+
+jobs:
+
+  ##==-- Build
+  build:
+    # on an Ubuntu VM, build inside a golang container
+    runs-on: ubuntu-latest
+    container: golang:1.16-buster
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Test
+        run: make test
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH=$PATH:$(go env GOPATH)/bin
+
+          go get github.com/mitchellh/gox  # prereq
+          make dev  # only produce the Linux AMD64 binary
+
+      - name: Upload binary for later jobs
+        uses: actions/upload-artifact@v2
+        with:
+          name: vault-plugin-secrets-active-directory
+          path: bin/vault-plugin-secrets-active-directory
+
+  ##==-- Test
+  test:
+    needs: build
+    # on an Ubuntu VM, test inside a Vault container
+    runs-on: ubuntu-latest
+    container: vault:1.6.4
+
+    # Helper container for LDAP testing
+    services:
+      samba:
+        image: laslabs/alpine-samba-dc
+        env:
+          SAMBA_DC_REALM: "corp.example.net"
+          SAMBA_DC_DOMAIN: "EXAMPLE"
+          SAMBA_DC_ADMIN_PASSWD: "SuperSecretPassw0rd"
+          SAMBA_DC_DNS_BACKEND: "SAMBA_INTERNAL"
+        ports:
+          - 389:389
+          - 636:636
+        options: >-
+          --cap-add SYS_ADMIN
+
+    steps:
+      - name: Create dir
+        run: mkdir -p /custom
+
+      - name: Download binary from previous job
+        uses: actions/download-artifact@v2
+        with:
+          name: vault-plugin-secrets-active-directory
+          path: /custom
+
+      - name: Make executable
+        run: chmod +x /custom/vault-plugin-secrets-active-directory
+
+      - name: Setup LDAP
+        shell: ash --noprofile --norc -eo pipefail {0}
+        run: |
+          set -euo pipefail
+          apk update
+          apk add \
+              docker-cli \
+              jq \
+              openldap-clients
+
+          sleep 30  # this is a terrible way to wait for Samba to start, sorry 😔
+
+          cat <<EOT >> bob.ldif
+          dn: CN=Bob,CN=Users,DC=corp,DC=example,DC=net
+          objectClass: top
+          objectClass: person
+          objectClass: organizationalPerson
+          objectClass: user
+          cn: Bob
+          description: test account
+          name: Bob
+          sAMAccountName: Bob
+          distinguishedName: CN=Bob,CN=Users,DC=corp,DC=example,DC=net
+          userPrincipalName: Bob
+          EOT
+
+          export LDAPTLS_REQCERT=never
+          ldapadd -Z \
+                  -h samba \
+                  -p 389 \
+                  -w "SuperSecretPassw0rd" \
+                  -D "CN=Administrator,CN=Users,DC=corp,DC=example,DC=net" \
+                  -f bob.ldif
+
+      - name: Test custom module
+        shell: ash --noprofile --norc -eo pipefail {0}
+        run: |
+          set -euo pipefail
+
+          vault server -dev -dev-plugin-dir=/custom &
+          export VAULT_ADDR='http://127.0.0.1:8200'
+
+          sleep 10  # this is a terrible way to wait for Vault to start, sorry 😔
+
+          echo "+++ Register plugin"
+          vault write sys/plugins/catalog/secret/custom-ad \
+              sha_256="$(sha256sum /custom/vault-plugin-secrets-active-directory | cut -d ' ' -f 1)" \
+              command="vault-plugin-secrets-active-directory"
+
+          echo "+++ Enable plugin"
+          vault secrets enable custom-ad
+
+          echo "+++ Configure plugin"
+          vault write custom-ad/config \
+              binddn='CN=Administrator,CN=Users,DC=corp,DC=example,DC=net' bindpass='SuperSecretPassw0rd' \
+              url=ldaps://samba \
+              userdn='CN=Users,DC=corp,DC=example,DC=net' \
+              insecure_tls="true"
+
+          echo "+++ Create account library"
+          vault write custom-ad/library/test \
+              service_account_names=Bob \
+              ttl=1h max_ttl=8h \
+              disable_check_in_enforcement="false"
+
+          # Give it a moment to rotate / set the password
+          sleep 1
+
+          echo "+++ View library status"
+          vault read custom-ad/library/test/status
+
+          echo "+++ Test Reece custom endpoint 'creds'"
+          vault read custom-ad/library/test/creds \
+              service_account_name=Bob
+
+  ##==-- Publish
+  publish:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/reece-v')  # only release tags are published
+    # on an Ubuntu VM, not within a container
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download binary from previous job
+        uses: actions/download-artifact@v2
+        with:
+          name: vault-plugin-secrets-active-directory
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: vault-plugin-secrets-active-directory
