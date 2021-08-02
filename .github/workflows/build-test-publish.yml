@@ -7,36 +7,36 @@ on: push
 jobs:
 
   ##==-- Build
-  build:
-    # on an Ubuntu VM, build inside a golang container
-    runs-on: ubuntu-latest
-    container: golang:1.16-buster
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
-
-      - name: Test
-        run: make test
-
-      - name: Build
-        shell: bash
-        run: |
-          set -euo pipefail
-          export PATH=$PATH:$(go env GOPATH)/bin
-
-          go get github.com/mitchellh/gox  # prereq
-          make dev  # only produce the Linux AMD64 binary
-
-      - name: Upload binary for later jobs
-        uses: actions/upload-artifact@v2
-        with:
-          name: vault-plugin-secrets-active-directory
-          path: bin/vault-plugin-secrets-active-directory
+#  build:
+#    # on an Ubuntu VM, build inside a golang container
+#    runs-on: ubuntu-latest
+#    container: golang:1.16-buster
+#
+#    steps:
+#      - name: Checkout code
+#        uses: actions/checkout@v2
+#
+#      - name: Test
+#        run: make test
+#
+#      - name: Build
+#        shell: bash
+#        run: |
+#          set -euo pipefail
+#          export PATH=$PATH:$(go env GOPATH)/bin
+#
+#          go get github.com/mitchellh/gox  # prereq
+#          make dev  # only produce the Linux AMD64 binary
+#
+#      - name: Upload binary for later jobs
+#        uses: actions/upload-artifact@v2
+#        with:
+#          name: vault-plugin-secrets-active-directory
+#          path: bin/vault-plugin-secrets-active-directory
 
   ##==-- Test
   test:
-    needs: build
+#    needs: build
     # on an Ubuntu VM, test inside a Vault container
     runs-on: ubuntu-latest
     container: vault:1.6.4
@@ -47,7 +47,7 @@ jobs:
         image: laslabs/alpine-samba-dc
         env:
           SAMBA_DC_REALM: "corp.example.net"
-          SAMBA_DC_DOMAINi: "EXAMPLE"
+          SAMBA_DC_DOMAIN: "EXAMPLE"
           SAMBA_DC_ADMIN_PASSWD: "SuperSecretPassw0rd"
           SAMBA_DC_DNS_BACKEND: "SAMBA_INTERNAL"
         ports:
@@ -57,19 +57,23 @@ jobs:
           --cap-add SYS_ADMIN
 
     steps:
-      - name: Download binary from previous job
-        uses: actions/download-artifact@v2
-        with:
-          name: vault-plugin-secrets-active-directory
-          path: /usr/local/bin
-
+#      - name: Download binary from previous job
+#        uses: actions/download-artifact@v2
+#        with:
+#          name: vault-plugin-secrets-active-directory
+#          path: /usr/local/bin
+#
       - name: Setup LDAP
         shell: ash --noprofile --norc -eo pipefail {0}
         run: |
           set -euo pipefail
           apk update
-          apk add openldap-clients
-          sleep 15  # this is a terrible way to wait for Samba to start, sorry 😔
+          apk add \
+              docker-cli \
+              jq \
+              openldap-clients
+
+          sleep 30  # this is a terrible way to wait for Samba to start, sorry 😔
 
           cat <<EOT >> bob.ldif
           dn: CN=Bob,CN=Users,DC=corp,DC=example,DC=net
@@ -85,6 +89,7 @@ jobs:
           userPrincipalName: Bob
           EOT
 
+          export LDAPTLS_REQCERT=never
           ldapadd -Z \
                   -h samba \
                   -p 389 \
